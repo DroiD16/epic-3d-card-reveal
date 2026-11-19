@@ -1,0 +1,27 @@
+{{!--
+    Rendered by CardPickApp (scripts/card-picker.js). The cards themselves are built in JS once the back
+    image is decoded and the layout is known; this template only holds the static chrome.
+    The backdrop repeats the viewer's exact stage shadow so the hand-over to CardViewerApp is seamless.
+--}}
+<div class="cp-stage" style="--cv-card-glow: {{glowShadow}};">
+    <div class="cp-backdrop"></div>
+
+    {{!-- Ambient glowing orbs, filled in by CardPickApp#_injectSparkles. --}}
+    <div class="cp-orbs"></div>
+
+    {{!-- Perspective root; .cp-fan is the single preserve-3d context every card is depth-sorted in. --}}
+    <div class="cp-scene">
+        <div class="cp-fan"></div>
+    </div>
+
+    <div class="cp-caption">
+        <div class="cp-caption-title">{{title}}</div>
+        {{#if subtitle}}<div class="cp-caption-sub">{{subtitle}}</div>{{/if}}
+    </div>
+
+    {{#if canCancel}}
+    <button type="button" class="cp-close-btn" data-action="cancel" data-tooltip="Cancel the pick">
+        <i class="fas fa-xmark"></i>
+    </button>
+    {{/if}}
+</div>

@@ -269,6 +269,47 @@
             dcv-sparkle-drift ease-in-out infinite,
             dcv-sparkle-twinkle ease-in-out infinite;
     }
+
+    /* Pick-flow hand-over (scripts/card-picker.js): a card flying in from the pick scene lands exactly on this
+       viewer's card, so the viewer must not pop in, and it stays invisible (with its sway parked at frame 0)
+       until the flight lands. Classes are set from the first paint via the app options. */
+    &.cv-handover {
+        .cv-card-container {
+            animation: none;
+        }
+
+        /* Orbs and glint were not on the flying card, so they bloom in after the swap instead of popping. The
+           orbs' own animations drive transform/opacity; the independent `scale` property stays free. */
+        .cv-sparkle-orb {
+            transition: scale 900ms cubic-bezier(0.2, 0.8, 0.2, 1) 120ms;
+        }
+
+        .cv-glint {
+            transition: transform 750ms, opacity 700ms ease-out;
+        }
+    }
+
+    &.cv-handover-hidden {
+        visibility: hidden;
+
+        .cv-card-animation-container,
+        .cv-dismiss-hint {
+            animation-play-state: paused;
+        }
+
+        .cv-sparkle-orb {
+            scale: 0;
+        }
+
+        .cv-glint {
+            opacity: 0;
+        }
+    }
+
+    /* Right after the hand-over the cursor tilt eases in instead of snapping (see releaseHandover). */
+    &.cv-tilt-ease .cv-perspective-container {
+        transition: transform 700ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
 }
 
 /* Animations (global; the dcv- prefix avoids clashes with other modules). */

@@ -1,3 +1,7 @@
+# Unreleased
+
+- Added **`EpicCards.Pick`**, a shared "pick a card" scene. A GM starts it for a player, and every connected client sees a face-down deck shuffled in 3D and spread into a fan. The player picks a card with the mouse while everyone else watches the hover; a GM can also pick on the player's behalf. The card is drawn at random with Foundry's Cards API into the player's hand (or a stack you name, or the deck's discard pile) only at the click. It then flies into the viewer for the usual dramatic reveal. After the reveal, flipping the card shows the card's own back side. The GM can cancel with ✕ or Esc before a card is chosen. The shuffle, fan, hover and pick moments have their own sounds (bundled, CC0, replaceable or silenced through `sounds`). See [the API reference](docs/API.md#epiccardspickoptions).
+
 # 0.0.10
 
 - https://github.com/brunocalado/epic-3d-card-reveal/issues/5

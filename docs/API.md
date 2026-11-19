@@ -224,6 +224,71 @@ EpicCards.Dealer({ deckName: 'Deck of Many Things' })
 
 ---
 
+## `EpicCards.Pick(options)`
+
+A shared "pick a card" scene. Every connected client sees a face-down deck shuffled and spread into a fan; one user (the **picker**) chooses a card with the mouse while everyone else watches the hover; the chosen card flies to the center and goes through the usual [dramatic reveal](#epiccardsdisplayoptions) in the 3D viewer.
+
+**GM only.** Which card is drawn is decided at the click, not before: the GM client that started the pick draws **one random card** from the deck into the destination stack with Foundry's Cards API, then tells every client which card it was. The clicked position only decides where the card flies from. No client learns a card face before that.
+
+### How the scene behaves
+
+- **Run-up (about 4–5 s).** The deck rises out of the dark, is riffle-shuffled twice, and spreads into a fan, backs up. The shuffle is built from a random seed in the start message, so every client sees the same shuffle.
+- **Choosing.** The picker hovers the fan and the card under the pointer lifts while its neighbours give way. The hover is mirrored on every other client. **Any GM** can also hover and click; a GM click picks the card on the player's behalf. Everyone else can only watch. When several pointers are on the fan at once, each client shows its own pointer's card first, then the picker's, then a GM's, so the card under your own cursor is always the one that lifts.
+- **Reveal.** The first click the starting GM receives wins. The rest of the fan collapses and sinks away, and the chosen card flies into the viewer and becomes the viewer's card. From there it's the normal dramatic reveal: the card waits out `revealDelay`, flips to its face, plays the reveal sound, and gets the glow, sparkles, cursor tilt and glint.
+- **After the reveal** each client is on its own, exactly as with a shared `Display`. Clicking the card flips it, and clicking outside closes the viewer on that client only.
+- **Reverse side.** In the fan the cards show the `back` image. After the first reveal, flipping the card shows the card's **own Foundry back** (`card.back.img`) instead, falling back to the fan image when the card has none. Decks whose card backs hold text (a rules side) read naturally this way.
+- **Cancel.** The GM who started the pick can cancel before a card is chosen, with the **✕** button or **Esc**. The scene closes on every client, nothing is drawn, and the promise resolves `null`. Players can't close the scene before the reveal. Esc is a regular keybinding (*Cancel card pick*, Configure Controls). It cancels only on the GM who started the pick; on other clients it does nothing while the scene is up.
+- **Disconnects.** If the starting GM disconnects during the choice, the scene closes on every client. Users who weren't connected when the pick started don't see it; there is no rejoin.
+- **One at a time.** Calling `Pick` while a pick is running warns and resolves `null`. With several GMs, a GM who is running a pick ignores a pick started by another GM at the same moment.
+- **Window resize.** The fan is laid out again if the window is resized during the choice.
+
+### Options
+| Option | Type | Description |
+|---|---|---|
+| `deckName` / `deckId` | `string` | The source `Cards` deck, by name or id. Warns and resolves `null` when the deck has no cards left to draw. |
+| `userId` / `userName` | `string` | The picker, by id or name. Any connected user, a GM included. Warns and resolves `null` when that user isn't connected. |
+| `destination` | `string` (optional) | The `Cards` stack that receives the drawn card: id, name or uuid. When omitted: the picker's hand from the **Complete Card Management** user flag `flags["complete-card-management"].playerHand` (id or uuid) if set, otherwise the deck's own discard pile, found or created the same way as [`Dealer.draw`](#drawoptions) does it. |
+| `back` | `string` (optional) | Image of the face-down cards in the deck and fan. Default: the `back.img` of the first card left in the deck, then the configured default card back. Pass the deck's own image (`deck.img`) when that is your card back. The cards keep this image's aspect ratio. |
+| `maxCards` | `number` (optional) | Cap on the number of cards in the fan. Default `24`. The fan shows `min(cards left in the deck, maxCards)`. The fan resizes to fit the screen at any count: past two dozen cards the arc stops widening and the cards overlap more. |
+| `promptPicker` | `string` (optional) | Caption shown to the picker during the choice. Default `"Pick a card"`. |
+| `promptSpectator` | `string` (optional) | Caption shown to everyone else. `{name}` is replaced by the picker's name. Default `"{name} is picking a card…"`. |
+| `promptGM` | `string` (optional) | Hint under the caption on a GM's screen (when the GM is not the picker). `{name}` is replaced by the picker's name. Default `"Click a card to pick it for {name}"`. |
+| `promptCancel` | `string` (optional) | Hint shown to the GM who started the pick. Default `"Esc or ✕ to cancel"`. |
+| `glowColor`, `glowIntensity` | (optional) | The viewer's glow, as for `Display`. The flying card takes on the same glow as it lands. |
+| `sound`, `soundVolume`, `soundChannel` | (optional) | The reveal sound, as for `Display`. See [Reveal sound](#reveal-sound). |
+| `revealDelay` | `number` (optional) | Wait before the landed card flips face up, in ms. Omit to use the world default. |
+| `sendToChat` | `boolean` (optional) | Post the revealed card to chat publicly about when it flips face up (once, from the GM's client, on a timer like `Dealer.draw`, so it is posted even if the GM closes the viewer early). Omit to use the world default. |
+| `showDescription` | `boolean` (optional) | Include the card's description in that chat message. Omit to use the world default. |
+| `reversalChance` | `number` (optional) | `0`–`100` chance that the card is shown upside-down. See [Reversed cards](#reversed-cards-tarot-style). |
+| `sounds` | `object` (optional) | Sounds of the new phases: `{ shuffle, fan, hover, pick }`, each an audio path. Each plays locally on every client at its moment: `shuffle` once per riffle as the cards fall, `fan` when the deck spreads, `hover` when the hovered card changes (rate-limited, played quieter), `pick` when the chosen card lifts out of the fan. Same rule as `sound`: a path plays that file, `""` forces silence, and an omitted entry uses the bundled sound (`assets/pick-*.ogg`, from Kenney's CC0 "Casino Audio" pack). They use the reveal sound's volume and channel. |
+
+### Returns
+`Promise<Array<CardData>|null>`. It resolves with one [card data](#card-data) entry, the drawn card exactly as `Dealer.draw` returns it, with three extra fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `userId` | `string` | The picker's user id. |
+| `pickedBy` | `string` | Id of the user whose click was accepted: the picker, or a GM who picked for them. |
+| `index` | `number` | The clicked position in the fan, from `0` on the left. |
+
+It resolves `null` when the pick was cancelled, couldn't start (see the warnings above), or the draw failed. It resolves right after the draw, while the card is still flying and before the reveal animation ends, just like `Dealer.draw`.
+
+### Example
+```js
+const deck = game.cards.getName('Stress deck');
+const [card] = await EpicCards.Pick({
+    deckName: deck.name,
+    userName: 'Player',
+    destination: 'Stress: Player',   // optional
+    back: deck.img,                  // the deck image is the card back
+    promptPicker: 'Draw your fate',
+    promptSpectator: '{name} is drawing…'
+}) ?? [];
+if (card) console.log(`${card.name} went to the hand`, card.uuid);
+```
+
+---
+
 # Macro builder
 
 Prefer not to write macros by hand? The module ships a fill-in **macro builder** that turns a few fields into a ready-to-run script macro (display an image, draw from a deck, or view a specific card). Open it either way:

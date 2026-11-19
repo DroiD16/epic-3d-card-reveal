@@ -112,4 +112,5 @@ https://github.com/brunocalado/epic-3d-card-reveal/issues
 - Released under the [LICENSE](LICENSE).
 - This module is a fork/rewrite of [orcnog-card-viewer](https://github.com/orcnog/orcnog-card-viewer), which took its visual inspiration from a popular 5e toolset.
 - [reveal.ogg](https://pixabay.com/sound-effects/musical-victory-chime-366449/)
+- `pick-*.ogg` (shuffle, fan, hover and pick sounds): [Casino Audio](https://kenney.nl/assets/casino-audio) by Kenney, CC0
 - [demo-card.webp and demo-card-back.webp](https://pixabay.com/illustrations/lion-wild-animal-abstract-1015153/)

@@ -110,6 +110,14 @@ class CardViewerApp extends foundry.applications.api.HandlebarsApplicationMixin(
      * @param {() => void} [options.onReveal]             Optional callback fired once when the face is first
      *                                                    revealed. Used to hold a face-down card's chat preview
      *                                                    (which shows the front) until the card is flipped face-up.
+     * @param {boolean} [options.handover]                Internal (pick flow): the viewer renders hidden, with its
+     *                                                    pop-in, sway and dramatic-reveal countdown held, so a card
+     *                                                    flying in from the pick scene can land exactly on it. The
+     *                                                    caller measures {@link handoverRect} and then calls
+     *                                                    {@link releaseHandover} on the frame the flight lands.
+     * @param {string} [options.revealBack]               Internal (pick flow): back image that replaces the shown
+     *                                                    back once the face has been revealed, so later flips show
+     *                                                    the card's own back instead of the deck back it arrived with.
      */
     constructor(options = {}) {
         super(options);
@@ -140,6 +148,11 @@ class CardViewerApp extends foundry.applications.api.HandlebarsApplicationMixin(
         // Index of the card currently blown up to full size via right-click, or null for the
         // normal fanned-out hand. See _toggleSolo.
         this._soloIndex = null;
+        // Pick-flow hand-over (see the constructor docs): hidden until released, then a dramatic reveal.
+        this.handover = !!options.handover;
+        // Back image swapped in after the first reveal, while the back is out of sight (see _swapRevealBack).
+        this.revealBack = options.revealBack || null;
+        this._backSwapped = false;
     }
 
     /** @override Called once per render before {@link _renderHTML} runs. */
@@ -162,7 +175,9 @@ class CardViewerApp extends foundry.applications.api.HandlebarsApplicationMixin(
     _onFirstRender(_context, _options) {
         this._layoutArc();
         this._injectSparkles();
-        this._scheduleDramaticReveal();
+        // A hand-over viewer waits for releaseHandover() so the countdown starts when the card is on screen.
+        if (!this.handover) this._scheduleDramaticReveal();
+        this._watchRevealBack();
 
         // Cards that render face-up (not face-down and not a pending dramatic reveal) expose their
         // face immediately, so the reveal fires right away. Face-down / dramatic-reveal cards
@@ -206,6 +221,9 @@ class CardViewerApp extends foundry.applications.api.HandlebarsApplicationMixin(
         if (this._revealLocked) return;
         const flipContainer = target.closest(".cv-flip-container");
         if (!flipContainer) return;
+        // Turning face-down: the back is still hidden behind the face at this instant, so a pending back swap
+        // can happen now (fallback for a flip that started before the reveal's own transition ended).
+        if (!flipContainer.classList.contains("flipped")) this._swapRevealBack();
         flipContainer.classList.toggle("flipped");
         // Removing "flipped" turns the card face-up: the face is now seen, so fire the reveal (once).
         // Flipping back face-down never re-fires it thanks to the _soundPlayed / _revealFired guards.
@@ -267,6 +285,59 @@ class CardViewerApp extends foundry.applications.api.HandlebarsApplicationMixin(
      */
     async close(options = {}) {
         return super.close({ ...options, animate: false });
+    }
+
+    /**
+     * Pick-flow hand-over, step 1: wait until the hidden viewer's card has its final size (the front image is
+     * decoded and laid out) and return its viewport rect, which the flying card lands on.
+     * @returns {Promise<DOMRect|null>} The card rect, or null when the viewer has nothing to show.
+     */
+    async handoverRect() {
+        const front = this.element?.querySelector(".cv-card-front");
+        const back = this.element?.querySelector(".cv-card-back");
+        await Promise.all([front, back].map(img => img?.decode?.().catch(() => null)));
+        const card = this.element?.querySelector(".cv-card-container");
+        const rect = card?.getBoundingClientRect();
+        return rect?.width && rect?.height ? rect : null;
+    }
+
+    /**
+     * Pick-flow hand-over, step 2: show the viewer and start the dramatic reveal. Called on the frame the
+     * flying card lands, in the same frame the pick scene hides itself, so the two never overlap on screen.
+     * The cursor tilt eases in for a moment: the pointer is usually far from the card at this point, and the
+     * first mousemove would otherwise snap the card to a strong tilt.
+     */
+    releaseHandover() {
+        if (!this.element) return;
+        this.element.classList.remove("cv-handover-hidden");
+        this.element.classList.add("cv-tilt-ease");
+        setTimeout(() => this.element?.classList.remove("cv-tilt-ease"), 900);
+        this._scheduleDramaticReveal();
+    }
+
+    /**
+     * When a {@link revealBack} is set, preload it and swap it in as soon as a flip to the face has settled
+     * (the back is then hidden behind the face). Called from {@link _onFirstRender}.
+     */
+    _watchRevealBack() {
+        if (!this.revealBack) return;
+        // Preload so the swapped-in image is decoded long before it can come into view.
+        this._revealBackImg = new Image();
+        this._revealBackImg.src = this.revealBack;
+        this._revealBackImg.decode?.().catch(() => null);
+        for (const flip of this.element.querySelectorAll(".cv-flip-container")) {
+            flip.addEventListener("transitionend", (event) => {
+                if (event.target !== flip || event.propertyName !== "transform") return;
+                if (!flip.classList.contains("flipped")) this._swapRevealBack();
+            });
+        }
+    }
+
+    /** Swap every card back to {@link revealBack}, once. */
+    _swapRevealBack() {
+        if (!this.revealBack || this._backSwapped || !this.element) return;
+        this._backSwapped = true;
+        for (const img of this.element.querySelectorAll(".cv-card-back")) img.src = this.revealBack;
     }
 
     /**
@@ -686,8 +757,12 @@ export default class FancyDisplay {
      * @param {() => void} [config.onReveal]                              Internal: callback fired once when the card is first
      *                                                                    revealed. Card flows (e.g. the dealer) pass this to
      *                                                                    defer a face-down card's chat preview until it flips.
+     * @param {boolean} [config.handover]                                 Internal (pick flow): render the viewer hidden for a
+     *                                                                    hand-over. See {@link CardViewerApp}.
+     * @param {string} [config.revealBack]                                Internal (pick flow): back image swapped in after the
+     *                                                                    first reveal. See {@link CardViewerApp}.
      */
-    constructor({ imgArray, glowColor, glowIntensity, faceDown, chatMeta, sendToChat, sound, soundVolume, soundChannel, revealDelay, isShared, onReveal } = {}) {
+    constructor({ imgArray, glowColor, glowIntensity, faceDown, chatMeta, sendToChat, sound, soundVolume, soundChannel, revealDelay, isShared, onReveal, handover, revealBack } = {}) {
         this.imgArray = imgArray ?? [];
         this.glowColor = glowColor;
         this.glowIntensity = glowIntensity;
@@ -700,18 +775,22 @@ export default class FancyDisplay {
         this.revealDelay = revealDelay;
         this.isShared = !!isShared;
         this.onReveal = onReveal ?? null;
+        this.handover = !!handover;
+        this.revealBack = revealBack ?? null;
     }
 
     /**
      * Render the viewer locally; optionally broadcast to other clients.
      * @param {boolean} [shareToAll=false]      If true and the local user may share, also broadcast to other clients.
      * @param {boolean} [dramaticReveal=false]  If true, render face-down first then auto-flip after the configured delay.
+     * @returns {Promise<CardViewerApp|null>}   The local viewer, or null when nothing was rendered. Existing callers
+     *                                          ignore it; the pick flow needs it for the hand-over.
      */
     async render(shareToAll = false, dramaticReveal = false) {
         try {
             if (!this.imgArray.length) {
                 ui.notifications.warn("Image URL or file path not provided.");
-                return;
+                return null;
             }
 
             const appearance = game.settings.get(MODULE_ID, SETTINGS.CARD_APPEARANCE);
@@ -777,7 +856,11 @@ export default class FancyDisplay {
                 // Card flows pass their reveal-time chat post via the constructor (this.onReveal);
                 // raw-image flows defer their own post here. Either fires when a manual face-down
                 // card is flipped face-up.
-                onReveal: this.onReveal ?? (manualReveal ? postImages : null)
+                onReveal: this.onReveal ?? (manualReveal ? postImages : null),
+                handover: this.handover,
+                revealBack: this.revealBack,
+                // Hand-over viewers start hidden from their very first paint (see card-viewer.css).
+                classes: this.handover ? ["cv-handover", "cv-handover-hidden"] : []
             });
 
             // Broadcast to other clients BEFORE awaiting the local render. Receivers build their own
@@ -810,9 +893,11 @@ export default class FancyDisplay {
             if (postImages && !manualReveal) {
                 postChatAfterReveal(dramaticReveal, this.revealDelay, postImages);
             }
+            return app;
         } catch (error) {
             ui.notifications.error("Error rendering the card viewer.");
             console.error(error);
+            return null;
         }
     }
 }

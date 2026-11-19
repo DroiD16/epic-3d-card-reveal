@@ -1,0 +1,246 @@
+/*!
+ * Epic 3D Card Reveal
+ * 2026 https://github.com/brunocalado
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 3.
+ */
+
+/*
+ * Styles for the full-screen "pick a card" scene, CardPickApp (scripts/card-picker.js).
+ *
+ * Scoped like card-viewer.css: the module id class plus the app's own `.card-pick-app` qualifier, so the
+ * fixed full-viewport rules never leak onto the module's other applications.
+ *
+ * 3D structure (see CardPickApp): .cp-scene holds the perspective, .cp-fan is the one preserve-3d context in
+ * which every card is depth-sorted, and each card nests pose → hover → flight wrappers, all preserve-3d except
+ * the last one, whose children (glow, shadow, image) are flat leaves. Only leaves are ever faded: opacity on a
+ * wrapper in the chain would flatten it.
+ */
+
+[class~="epic-3d-card-reveal"].card-pick-app {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    /* Just under the viewer (9999), which is rendered hidden above this scene and revealed at the hand-over. */
+    z-index: 9998;
+    max-height: none !important;
+    max-width: none !important;
+    user-select: none;
+
+    *, *::before, *::after {
+        box-sizing: border-box;
+    }
+
+    .cp-stage {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        cursor: default;
+
+        /* The picker (and GMs) get a pointer only while a card is under the cursor. */
+        &.cp-interactive.cp-has-hover {
+            cursor: pointer;
+        }
+    }
+
+    /* The very same shadow as the viewer's .cv-stage: the hand-over swaps one for the other in a single frame. */
+    .cp-backdrop {
+        position: absolute;
+        inset: 0;
+        box-shadow: inset 0 0 100vh 100vh rgb(0 0 0 / 88%);
+        pointer-events: none;
+    }
+
+    /* The viewer's sparkle orbs (same gradient, same drift and twinkle keyframes from card-viewer.css), spread
+       over the whole stage. The box fades as one, so the orbs' own twinkle keeps running underneath. */
+    .cp-orbs {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 650ms ease-in;
+
+        &.cp-visible {
+            opacity: 1;
+            transition: opacity 1600ms ease-out 250ms;
+        }
+    }
+
+    .cp-orb {
+        position: absolute;
+        translate: -50% -50%;
+        background: radial-gradient(
+            circle closest-side,
+            rgb(255 255 240 / 95%) 0%,
+            rgb(255 250 180 / 55%) 14%,
+            rgb(255 240 110 / 25%) 34%,
+            rgb(255 235 80 / 8%) 60%,
+            rgb(255 235 60 / 0%) 100%
+        );
+        will-change: transform, opacity;
+        animation:
+            dcv-sparkle-drift ease-in-out infinite,
+            dcv-sparkle-twinkle ease-in-out infinite;
+    }
+
+    .cp-scene {
+        position: absolute;
+        inset: 0;
+        perspective: 100vh;
+        perspective-origin: 50% 50%;
+        pointer-events: none;
+    }
+
+    .cp-fan {
+        position: absolute;
+        inset: 0;
+        transform-style: preserve-3d;
+    }
+
+    /* Full viewer size (set from JS); poses scale it down. Centered on the stage origin. */
+    .cp-card {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: var(--cp-card-w);
+        height: var(--cp-card-h);
+        margin-left: calc(var(--cp-card-w) / -2);
+        margin-top: calc(var(--cp-card-h) / -2);
+        transform-style: preserve-3d;
+        will-change: transform;
+    }
+
+    .cp-card-hover {
+        position: absolute;
+        inset: 0;
+        transform-style: preserve-3d;
+        transition: transform var(--cp-hover-ms, 300ms) cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    .cp-card-flight {
+        position: absolute;
+        inset: 0;
+    }
+
+    /* The viewer's glow (same --cv-card-glow value), faded in on the hovered and on the flying card.
+       It only exists (display) on those cards: a wide blurred shadow enlarges the card's composited layer even
+       while invisible, and two dozen of them cost a weak GPU a good part of its frame rate. `allow-discrete`
+       and `@starting-style` keep the fade in both directions despite the display switch. */
+    .cp-card-glow {
+        display: none;
+        position: absolute;
+        inset: 0;
+        border-radius: 3%;
+        box-shadow: var(--cv-card-glow);
+        opacity: 0;
+        transition: opacity 300ms ease-out, display 300ms allow-discrete;
+    }
+
+    /* Card stock edge + a tight drop shadow; separates overlapping cards in the stack and the fan. Kept small
+       for the same reason: the blur radius is paid for on every card, every frame. */
+    .cp-card-shade {
+        position: absolute;
+        inset: 0;
+        border-radius: 3%;
+        box-shadow:
+            0 0 0 1px rgb(236 222 196 / 28%),
+            0 0.2vh 0.7vh rgb(0 0 0 / 60%);
+    }
+
+    .cp-card-body {
+        position: absolute;
+        inset: 0;
+        border-radius: 3%;
+        overflow: hidden;
+    }
+
+    .cp-card-img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border: 0;
+        border-radius: 3%;
+        object-fit: fill;
+        pointer-events: none;
+    }
+
+    /* Soft sheen on the hovered card. */
+    .cp-card-shine {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(160deg, rgb(255 255 255 / 22%) 0%, rgb(255 255 255 / 4%) 45%, transparent 70%);
+        opacity: 0;
+        transition: opacity 220ms ease-out;
+    }
+
+    .cp-card.cp-hovered,
+    .cp-card.cp-picked {
+        .cp-card-shine {
+            opacity: 1;
+        }
+
+        .cp-card-glow {
+            display: block;
+            opacity: 0.45;
+
+            @starting-style {
+                opacity: 0;
+            }
+        }
+    }
+
+    .cp-caption {
+        position: absolute;
+        top: 7vh;
+        left: 50%;
+        width: min(90vw, 60rem);
+        translate: -50% 0.6rem;
+        text-align: center;
+        color: rgb(255 255 255 / 90%);
+        text-shadow: 0 2px 8px rgb(0 0 0 / 85%);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 450ms ease-out, translate 600ms cubic-bezier(0.16, 1, 0.3, 1);
+
+        &.cp-visible {
+            opacity: 1;
+            translate: -50% 0;
+        }
+    }
+
+    .cp-caption-title {
+        font-family: var(--font-h1, var(--font-title, serif));
+        font-size: clamp(1.6rem, 4.2vh, 3rem);
+        line-height: 1.15;
+        letter-spacing: 0.03em;
+    }
+
+    .cp-caption-sub {
+        margin-top: 0.5rem;
+        font-size: 0.9rem;
+        color: rgb(255 255 255 / 55%);
+    }
+
+    /* Same look and spot as the viewer's close button. */
+    .cp-close-btn {
+        position: fixed;
+        top: 1.5rem;
+        left: 1.5rem;
+        border: 0;
+        width: auto;
+        font-size: 1.75rem;
+        line-height: 1;
+        color: rgb(255 255 255 / 60%);
+        background: transparent;
+        cursor: pointer;
+        transition: color 250ms, transform 250ms;
+
+        &:hover {
+            color: rgb(255 255 255 / 100%);
+            transform: scale(1.15);
+        }
+    }
+}

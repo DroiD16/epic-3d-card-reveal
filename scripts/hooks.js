@@ -12,8 +12,10 @@ import { postCardToChat, resolveSendToChat } from "./helpers.js";
 import FancyDisplay from "./fancy-display.js";
 import CardDealer from "./card-dealer.js";
 import MacroBuilder from "./macro-builder.js";
+import CardPicker from "./card-picker.js";
 
 const TEMPLATE = `modules/${MODULE_ID}/templates/card-viewer.hbs`;
+const PICK_TEMPLATE = `modules/${MODULE_ID}/templates/card-picker.hbs`;
 const SOCKET_EVENT = `module.${MODULE_ID}`;
 
 /**
@@ -24,8 +26,18 @@ export default function registerHooks() {
     Hooks.once("init", async () => {
         registerSettings();
         CONFIG.queries[CardDealer.CREATE_PILE_QUERY] = CardDealer.onCreatePileQuery;
-        // Pre-compile the viewer template so the first render doesn't pay the parse cost.
-        await foundry.applications.handlebars.loadTemplates([TEMPLATE]);
+        // Esc cancels a running pick on the GM that started it, and is swallowed on every other client while the
+        // scene is up. PRIORITY runs it before core's dismiss, which would otherwise open the main menu (frameless
+        // apps are not closed by Esc); when no pick scene is up, onDown returns false and Esc behaves as usual.
+        game.keybindings.register(MODULE_ID, "cancelPick", {
+            name: "Cancel card pick",
+            hint: "While a \"pick a card\" scene is up: cancels it if you are the GM who started it (before a card is chosen).",
+            editable: [{ key: "Escape" }],
+            precedence: CONST.KEYBINDING_PRECEDENCE.PRIORITY,
+            onDown: () => CardPicker.onEscape()
+        });
+        // Pre-compile the viewer and pick templates so the first render doesn't pay the parse cost.
+        await foundry.applications.handlebars.loadTemplates([TEMPLATE, PICK_TEMPLATE]);
     });
 
     /* ------------------------- setup ------------------------- */
@@ -105,6 +117,21 @@ export default function registerHooks() {
                     return null;
                 }
                 return new MacroBuilder().render({ force: true });
+            },
+
+            /**
+             * "Pick a card": every connected client sees a face-down deck shuffled and spread into a fan, the
+             * chosen user picks a card with the mouse (spectators see the hover mirrored), and the card is then
+             * drawn at random from the deck into the destination stack and revealed through the 3D viewer on
+             * every client. GM only. Options: `deckName`/`deckId`, `userId`/`userName` (the picker),
+             * `destination`, `back`, `maxCards`, `promptPicker`, `promptSpectator`, the usual appearance/sound
+             * options, `sendToChat`, `showDescription`, `reversalChance` and `sounds` ({shuffle, fan, hover, pick}).
+             * See docs/API.md.
+             * Example: `await EpicCards.Pick({ deckName: "Tarot", userName: "Player" });`
+             * @returns {Promise<Array<object>|null>} The drawn card's data, or null when cancelled/impossible.
+             */
+            Pick(options = {}) {
+                return CardPicker.pick(options);
             }
         };
     });
@@ -117,6 +144,9 @@ export default function registerHooks() {
 
         // Native socket. Single channel, payload `{ type, payload }`.
         game.socket.on(SOCKET_EVENT, (data) => _onSocketMessage(data));
+
+        // A pick scene closes on every client when the GM who started it drops out before the choice.
+        Hooks.on("userConnected", (user, connected) => CardPicker.onUserConnected(user, connected));
     });
 
     /* ------------------------ card UIs ----------------------- */
@@ -134,10 +164,12 @@ export default function registerHooks() {
 
 /**
  * Receive a socket message broadcast by another client and react accordingly.
- * Currently only handles `shareToAll` (open the viewer with the sender's payload).
+ * Handles `shareToAll` (open the viewer with the sender's payload) and routes the `pick*` messages of the
+ * "pick a card" flow to {@link CardPicker.onSocketMessage}.
  * @param {{type:string, payload:object}} data
  */
 function _onSocketMessage({ type, payload } = {}) {
+    if (typeof type === "string" && type.startsWith("pick")) return CardPicker.onSocketMessage(type, payload);
     if (type !== "shareToAll" || !payload) return;
     new FancyDisplay({
         imgArray: payload.images,
