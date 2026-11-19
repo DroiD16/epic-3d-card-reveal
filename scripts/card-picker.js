@@ -1048,7 +1048,25 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
             this.element.style.display = "none";
             this._allowClose = true;
             this.close();
+            this._openDestination();
         });
+    }
+
+    /**
+     * On the picker's own client, open the stack that received the card (their hand, usually), when the pick
+     * was started with `openDestination`. It opens underneath the viewer, so the player finds the card waiting
+     * there the moment they dismiss it. Hand sheets that are not opened by default (a docked hand strip, for
+     * one) would otherwise leave the player wondering where the card went.
+     */
+    _openDestination() {
+        const { openDestination, destinationId, pickerId } = this.session;
+        if (!openDestination || game.user.id !== pickerId) return;
+        try {
+            const stack = game.cards.get(destinationId);
+            if (stack?.testUserPermission(game.user, "OBSERVER")) stack.sheet.render({ force: true });
+        } catch (error) {
+            console.warn(`${MODULE_ID} | Could not open the destination stack.`, error);
+        }
     }
 
     /**
@@ -1100,7 +1118,7 @@ export default class CardPicker {
         const {
             deckName, deckId, userId, userName, destination, back, maxCards = DEFAULT_MAX_CARDS,
             promptPicker, promptSpectator, promptGM, promptCancel, glowColor, glowIntensity, sound, soundVolume, soundChannel,
-            revealDelay, sendToChat, showDescription, reversalChance = 0, sounds = {}
+            revealDelay, sendToChat, showDescription, reversalChance = 0, sounds = {}, openDestination = false
         } = options;
 
         if (!game.user.isGM) {
@@ -1171,6 +1189,9 @@ export default class CardPicker {
             seed: Math.floor(Math.random() * 0xFFFFFFFF),
             pickerId: picker.id,
             gmId: game.user.id,
+            // Lets the picker's client open the stack the card went to (see CardPickApp#_openDestination).
+            destinationId: dest.id,
+            openDestination: !!openDestination,
             count: Math.max(1, Math.min(available.length, Math.floor(Number(maxCards) || DEFAULT_MAX_CARDS))),
             back: back || available[0]?.back?.img || appearanceCfg.backImage,
             prompts: {
