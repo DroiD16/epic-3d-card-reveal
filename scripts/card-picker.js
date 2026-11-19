@@ -73,6 +73,9 @@ const HOVER_SOUND_GAP_MS = 90;
 const DECK_RX = 44;
 const DECK_RZ = -5;
 
+/** How far a packet's inner edge is bent up during a riffle (degrees about the deck's long axis). */
+const PACKET_TILT = 12;
+
 /** Easing curves shared by the phases, so every move in the scene has the same feel. */
 const EASE = {
     out: "cubic-bezier(0.16, 1, 0.3, 1)",
@@ -527,12 +530,20 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
             t = result.end;
         }
 
-        // 3. Spread into the fan, bottom card first, so the spread sweeps left to right.
+        // 3. Into the fan, in two moves that never let two cards cross. First the whole deck stands up as one
+        // block (every card on the same timing, so they stay parallel); then it spreads within its own plane,
+        // bottom card first, so the spread sweeps left to right. Tilting and spreading at once would give
+        // neighbours different angles for a moment, and their planes would cut through each other.
         order.forEach((card, i) => { card.fanIndex = i; });
         this.fanOrder = order;
+        const standDur = 420;
+        for (const card of order) {
+            this._animatePose(card, this._fanClosedPose(card.fanIndex), { delay: t, duration: standDur, easing: EASE.inOut });
+        }
+        t += standDur - 40;
         this._later(() => playPhaseSound(this.session.sounds.fan, this.session.appearance), t);
         const fanStagger = Math.min(24, 300 / this.count);
-        const fanDur = 950;
+        const fanDur = 780;
         for (const card of order) {
             const i = card.fanIndex;
             this._animatePose(card, this._fanPose(i), { delay: t + i * fanStagger, duration: fanDur, easing: EASE.out });
@@ -540,6 +551,19 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
         const fanEnd = t + fanDur + (this.count - 1) * fanStagger;
         this._later(() => this.caption.classList.add("cp-visible"), fanEnd - 450);
         this._later(() => this._openChoice(), fanEnd);
+    }
+
+    /**
+     * Pose of card `i` in the closed fan: the deck upright at the middle of the arc, ready to spread.
+     * @param {number} i
+     * @returns {Pose}
+     */
+    _fanClosedPose(i) {
+        const L = this.layout;
+        return {
+            x: L.pivotX, y: L.pivotY + L.radius, z: 0, rx: 0, ry: 0, rz: 0,
+            lx: 0, ly: 0, lz: i * L.fanGap, sx: L.fanS, sy: L.fanS
+        };
     }
 
     /**
@@ -560,6 +584,13 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
      * Schedule one riffle shuffle starting at `t0`: cut the deck, lift the two packets apart, let their cards
      * fall back into one pile alternately (Gilbert–Shannon–Reeds: the next card comes from a packet with odds
      * proportional to its size, all from the seeded PRNG), then square the pile up.
+     *
+     * The choreography is laid out so that no two cards ever cut through each other. Cards only intersect
+     * when their planes are at different angles while they overlap, so:
+     * - the packets separate flat and are bent (inner edges up) only once they no longer overlap;
+     * - they are held above the pile, and a card always leaves from the bottom of its packet, downward;
+     * - a falling card flattens while it is still under its own packet and travels the rest of the way flat,
+     *   parallel to the pile and to the cards falling from the other side.
      * @param {Array<object>} order  Stack bottom → top.
      * @param {number} t0            Start time (ms after the scene start).
      * @param {1|-1} side            Which side the top packet goes to.
@@ -574,18 +605,37 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
         const cut = Math.max(1, Math.min(n - 1, Math.round(n / 2 + (rng() - 0.5) * n * 0.2)));
         const bottom = order.slice(0, cut);
         const top = order.slice(cut);
-        const dx = L.deckW * 0.6;
+        const H = L.deckH;
+        const dx = L.deckW * 0.64;
+        // Height of the packets above the table: clear of the finished pile plus room for a card to flatten.
+        const lift = n * L.deckGap + H * 0.2;
+        const rad = DECK_RX * Math.PI / 180;
 
-        // Split: the top packet is lifted off and moves out first, the bottom one follows.
-        const packetPose = (s, k) => ({
-            // Inner edges up, like packets bent under the thumbs: the cards then spring down onto the pile from
-            // above it and never cut through it.
-            x: s * dx, y: L.deckY - L.deckH * 0.03, z: 34, rx: DECK_RX, ry: s * 20, rz: DECK_RZ + s * 10,
-            lx: 0, ly: 0, lz: k * L.deckGap, sx: L.deckS, sy: L.deckS
+        /**
+         * A pose given in the table's own frame: `u` across, `v` along the deck, `w` up off the table (the
+         * deck lies tilted back by DECK_RX, so "up" is partly toward the viewer). `idx` is the card's place in
+         * the stack it belongs to; `tilt` bends it about the deck's long axis; `turn` turns it in its plane.
+         */
+        const tablePose = (u, v, w, idx, tilt = 0, turn = 0) => ({
+            x: u, y: L.deckY + v * Math.cos(rad) - w * Math.sin(rad), z: v * Math.sin(rad) + w * Math.cos(rad),
+            rx: DECK_RX, ry: tilt, rz: DECK_RZ + turn,
+            lx: 0, ly: 0, lz: idx * L.deckGap, sx: L.deckS, sy: L.deckS
         });
-        const splitDur = 340;
-        top.forEach((card, k) => this._animatePose(card, packetPose(side, k), { delay: t0, duration: splitDur, easing: EASE.inOut }));
-        bottom.forEach((card, k) => this._animatePose(card, packetPose(-side, k), { delay: t0 + 50, duration: splitDur, easing: EASE.inOut }));
+
+        // Split. Every card keeps its stack index, so the top packet stays above the bottom one all the way
+        // out. Both rise and part flat; the bend comes in over the last stretch, when they no longer overlap.
+        const splitDur = 380;
+        const splitEase = ["cubic-bezier(0.4, 0, 0.7, 0.6)", "cubic-bezier(0.2, 0.5, 0.3, 1)"];
+        const packets = [[bottom, -side, 0, 50], [top, side, cut, 0]];
+        for (const [packet, s, base, wait] of packets) {
+            packet.forEach((card, k) => {
+                card._packet = { s, idx: base + k };
+                this._animatePose(card, tablePose(s * dx, -H * 0.03, lift, base + k, s * PACKET_TILT, s * 7), {
+                    delay: t0 + wait, duration: splitDur, viaAt: 0.62, viaEase: splitEase,
+                    via: tablePose(s * dx * 0.86, -H * 0.02, lift, base + k)
+                });
+            });
+        }
 
         // Interleave: bottoms of the packets fall first; each card lands a little askew.
         const left = [...bottom];
@@ -596,8 +646,8 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
             next.push(pickLeft ? left.shift() : right.shift());
         }
         const interval = Math.min(30, 400 / n);
-        const dropDur = 320;
-        const dropStart = t0 + splitDur + 60;
+        const dropDur = 330;
+        const dropStart = t0 + splitDur + 90;
         this._later(() => playPhaseSound(this.session.sounds.shuffle, this.session.appearance), dropStart);
         next.forEach((card, j) => {
             const jitter = {
@@ -605,16 +655,11 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
                 x: (rng() - 0.5) * L.deckW * 0.03,
                 y: (rng() - 0.5) * L.deckH * 0.02
             };
-            card._jitter = jitter;
-            // Each card springs off its packet in a small arc: up and halfway in, levelling out, then down
-            // onto the pile.
-            const to = deckPose(j, jitter);
-            const from = card.pose;
-            const via = {
-                ...to, x: from.x * 0.42, y: to.y - L.deckH * 0.05, z: 46 + L.deckH * 0.08,
-                rx: DECK_RX - 7, ry: from.ry * 0.45, rz: (from.rz + to.rz) / 2
-            };
-            this._animatePose(card, to, { delay: dropStart + j * interval, duration: dropDur, via });
+            const { s, idx } = card._packet;
+            // Down and a third of the way in while flattening (still under its own packet), then flat onto
+            // the pile.
+            const via = tablePose(s * dx * 0.7, -H * 0.02, lift - H * 0.1, (idx + j) / 2, 0, s * 3 + jitter.rz / 2);
+            this._animatePose(card, deckPose(j, jitter), { delay: dropStart + j * interval, duration: dropDur, via, viaAt: 0.4 });
         });
 
         // Square up: every card slides back into a clean stack.
@@ -629,18 +674,19 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
      * so a queued animation never overrides the one before it until its own delay is over.
      * @param {object} card
      * @param {Pose} to
-     * @param {{delay?:number, duration:number, easing?:string, via?:Pose, viaAt?:number}} timing  With `via`
-     *   the card passes through that pose at `viaAt` (0..1) of the way: it decelerates into it and accelerates
-     *   out of it, the way a tossed card rises and falls; `easing` is not used then.
+     * @param {{delay?:number, duration:number, easing?:string, via?:Pose, viaAt?:number, viaEase?:[string, string]}} timing
+     *   With `via` the card passes through that pose at `viaAt` (0..1) of the way and `easing` is not used:
+     *   each leg has its own curve (`viaEase`). By default the card eases into the via pose and falls out of
+     *   it, the way a released card hangs for an instant and drops.
      * @returns {Animation}
      */
-    _animatePose(card, to, { delay = 0, duration, easing = "linear", via = null, viaAt = 0.45 }) {
+    _animatePose(card, to, { delay = 0, duration, easing = "linear", via = null, viaAt = 0.45, viaEase = null }) {
         const from = card.pose;
         card.pose = to;
         const keyframes = via
             ? [
-                { transform: poseCSS(from), easing: "cubic-bezier(0.2, 0.6, 0.35, 1)" },
-                { transform: poseCSS(via), offset: viaAt, easing: "cubic-bezier(0.55, 0, 0.8, 0.45)" },
+                { transform: poseCSS(from), easing: viaEase?.[0] ?? "cubic-bezier(0.2, 0.6, 0.35, 1)" },
+                { transform: poseCSS(via), offset: viaAt, easing: viaEase?.[1] ?? "cubic-bezier(0.55, 0, 0.8, 0.45)" },
                 { transform: poseCSS(to) }
             ]
             : [{ transform: poseCSS(from) }, { transform: poseCSS(to) }];
@@ -921,7 +967,8 @@ class CardPickApp extends foundry.applications.api.HandlebarsApplicationMixin(fo
                 ...card.pose, x: gather.x, y: gather.y, rz: card.pose.rz * 0.25, lz: card.fanIndex * L.fanGap - 40
             };
             this._animatePose(card, g, { delay, duration: 420, easing: EASE.inOut });
-            this._animatePose(card, { ...g, y: g.y + L.vh * 0.75, z: -160, rx: 28 },
+            // No tilt on the way down: the cards leave on different delays and would cut through each other.
+            this._animatePose(card, { ...g, y: g.y + L.vh * 0.75, z: -160 },
                 { delay: delay + 340, duration: 560, easing: EASE.fall });
             card.body.animate([{ opacity: 1 }, { opacity: 0 }], { delay: delay + 520, duration: 380, easing: "ease-in", fill: "forwards" });
             card.shade.animate([{ opacity: 1 }, { opacity: 0 }], { delay: delay + 340, duration: 300, fill: "forwards" });
