@@ -11,6 +11,9 @@ import { postCardToChat, postImageToChat, postChatAfterReveal, resolveSendToChat
 
 const TEMPLATE = `modules/${MODULE_ID}/templates/card-viewer.hbs`;
 
+/** Duration of the card flip, in ms. Mirrors the `.cv-flip-container` transition in styles/card-viewer.css. */
+const FLIP_MS = 750;
+
 /**
  * Decorative glowing light orbs clustered around the card. Each entry is rendered as a single
  * pure-CSS radial-gradient sphere by {@link CardViewerApp#_injectSparkles} — no image assets.
@@ -471,8 +474,11 @@ class CardViewerApp extends foundry.applications.api.HandlebarsApplicationMixin(
         setTimeout(() => {
             // The viewer may have been dismissed during the wait; don't reveal/sound a dead card.
             if (!this.element?.isConnected) return;
-            // The wait is over: lift the manual-flip lock so cards behave normally again.
-            this._revealLocked = false;
+            // The wait is over: lift the manual-flip lock so cards behave normally again. A pick hand-over stays
+            // locked until its flip has landed: the player has just clicked to choose a card and tends to click
+            // again, and a click caught mid-flip would turn the card straight back onto its other side.
+            if (this.handover) setTimeout(() => { this._revealLocked = false; }, flips.length * 80 + FLIP_MS);
+            else this._revealLocked = false;
             // The face becomes visible as the first card flips, so the reveal fires here (once)
             // rather than per-card, even when a whole hand fans out.
             this._revealFace();
